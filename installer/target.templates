@@ -1,0 +1,20 @@
+Template: library/target
+Type: select
+Choices: ${CHOICES}
+Description: Which internal disk should Debian erase and replace?
+ ALL partitions and files on the selected disk will be removed, including
+ Rocky Linux or any other installed operating system. USB disks are excluded.
+
+Template: library/erase-confirm
+Type: boolean
+Default: false
+Description: Erase the entire disk ${TARGET}?
+ Debian will replace every partition on this disk. This includes any
+ existing operating systems and data. Choose No to stop disk setup.
+
+Template: library/no-target
+Type: error
+Description: No eligible internal installation disk was found
+ Automatic disk setup excludes USB disks, removable disks, and the installer
+ medium. No disk has been erased. Check the storage controller configuration
+ or use Debian's manual partitioner to select an appropriate target.
