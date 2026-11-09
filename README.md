@@ -1,6 +1,6 @@
 # Bare-metal Debian installation for the Library
 
-Turn an x86-64 PC, laptop, or UEFI ARM64 machine into an offline Library.
+Turn any x86-64 PC, laptop, or ARM64 machine into an offline Library.
 `bootstrap_debian` creates a Debian 13 **trixie** installer USB, installs the
 GNOME desktop and required starting tools, and downloads
 [Library-Creator_x86](https://github.com/holly-the-dude/Library-Creator_x86)
@@ -10,25 +10,29 @@ bootstrap to install the Library services and starter content.
 There are two stages: **install Debian**, then **set up the Library**.
 The Library bootstrap is not automatically executed during Debian installation.
 The same Library checkout supports native AMD64 and ARM64; despite its name,
-this is not the separate Raspberry Pi Library-Creator project.
+this is seperate from Raspberry Pi Library-Creator project. It contains changes needed
+non Raspberry Pi's.
 
 ## 1. Prepare the hardware
 
 You need:
 
 - An x86-64 Intel/AMD machine (`amd64`), or AArch64 hardware with UEFI (`arm64`).
-  Neither 32-bit x86 nor 32-bit ARM is supported. This installer does not supply
+  Neither 32-bit x86 nor 32-bit ARM is supported but feel free to fix it up to support them. 
+  This installer does not supply
   Raspberry Pi boot firmware or board-specific display drivers.
 - An internal installation disk larger than 32 GB, with additional room for
-  container builds and content. The recipe reserves **32,000 MB for Debian**;
+  container builds and content. The recipe reserves **32GB for Debian**;
   GNOME, container layers, Office and routing imports also consume OS space.
   Large builds may require increasing that recipe before creating the image.
 - A USB drive for the Debian installer, plus an optional separate content USB.
-  These are different drives. The installer USB is erased when written.
+  These are different drives. The installer USB is erased when it is configured to install Debian.
 - Internet access for Debian installation, the Git clone, Library package/image
-  builds, and content downloads. Ethernet is useful while setting up Wi-Fi.
+  builds, and content downloads. Ethernet is useful while setting up. But will work Wi-Fi.
 - A keyboard and display for target-disk selection and initial setup.
   An AP-capable Wi-Fi adapter is needed only if you want a Library hotspot.
+  On a Dell laptop it has been tested with switching between ineternet and hotspot
+  without issue. 
 
 The installer asks you to select an **internal disk by device, model and
 capacity**, then confirm erasing it (default **No**). It replaces that disk's
@@ -41,8 +45,8 @@ Choose where content will live:
 
 | Builder choice | Debian layout | Library setup |
 | --- | --- | --- |
-| Same disk (`partition`) | 32,000 MB ext4 `/`, EFI partition where required, remaining space as ext4 labeled `Library`, mounted at `/Library` | Use the existing mounted `/Library`; do not format it again. |
-| Separate USB (`usb`) | 32,000 MB `/`, remaining space as `/home` | In Debian's manual partitioner, configure the separate data USB as ext4, label `Library`, mount `/Library`; or mount it there before Library setup. |
+| Same disk (`partition`) | 32 GB ext4 `/`, EFI partition where required, remaining space as ext4 labeled `Library`, mounted at `/Library` | Use the existing mounted `/Library`; do not format it again. |
+| Separate USB (`usb`) | 32 GB `/`, remaining space as `/home` | In Debian's manual partitioner, configure the separate data USB as ext4, label `Library`, mount `/Library`; or mount it there before Library setup. |
 
 No swap partition is created. Debian may ask you to acknowledge that choice.
 The separate USB option leaves partitioning open for manual configuration.
@@ -84,15 +88,11 @@ administrator** and run:
 
 ```powershell
 cd C:\debian_bootstrap
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\bootstrap_debian.ps1
+powershell.exe
+   .\bootstrap_debian.ps1
 ```
 
-**No WSL or Python installation is required**. PowerShell downloads portable
-MSYS2/xorriso tools into `tmp/tools`.
-It checks the runtime release SHA256 digest, and MSYS2 verifies package
-signatures. Nothing is added to the system PATH. UNC network shares are not
-supported.
-
+PowerShell downloads Balena Etcher standalone for creating the image. 
 ### Output and rebuilding
 
 The output directory contains `preseed.cfg` and
@@ -200,6 +200,8 @@ Then check the host and open the Library setup menu:
 
 ```sh
 cd /root/Library-Creator_x86
+./bootstrap 
+# optional commands:
 ./bootstrap --check
 ./bootstrap --storage mounted
 ```
