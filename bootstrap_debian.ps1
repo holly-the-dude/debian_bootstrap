@@ -5,17 +5,12 @@ param(
     [ValidateSet('partition','usb')][string]$Layout,
     [string]$OutputDirectory = (Join-Path $PSScriptRoot 'output'),
     [string]$Image,
-    [switch]$NoWrite,
-    [switch]$WriteOnly,
-    [int]$DiskNumber = -1,
-    [string]$ExpectedDiskId,
-    [string]$ExpectedImageHash
+    [switch]$NoWrite
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $script:Root = $PSScriptRoot
-$script:EntryScript = $PSCommandPath
 $script:Tmp = Join-Path $script:Root 'tmp'
 
 function Say([string]$Text, [ConsoleColor]$Color = 'Cyan') {
@@ -244,133 +239,9 @@ function Start-Etcher([string]$ImagePath) {
     Start-Process -FilePath $exe -Verb RunAs -ArgumentList ('"' + $ImagePath + '"') | Out-Null
     Say 'Etcher is open. Complete USB flashing in its window; closing this script does not stop Etcher.' Green
 }
-function Get-UsbDisks {
-    return @(Get-Disk | Where-Object {
-        $_.BusType -eq 'USB' -and !$_.IsBoot -and !$_.IsSystem -and !$_.IsReadOnly -and $_.Size -gt 0
-    } | Sort-Object Number)
-}
-function Describe-Disk($Disk) {
-    return '{0} - {1:N1} GiB (Disk {2})' -f $Disk.FriendlyName, ($Disk.Size / 1GB), $Disk.Number
-}
-function Test-Administrator {
-    return ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator)
-}
-function Write-Usb([string]$ImagePath, [int]$Number, [string]$Identity, [string]$ImageHash) {
-    if (!(Test-Administrator)) { throw 'USB writing requires Administrator access.' }
-    $disk = Get-Disk -Number $Number
-    if ($disk.BusType -ne 'USB' -or $disk.IsBoot -or $disk.IsSystem -or $disk.IsReadOnly) {
-        throw 'Refusing a non-USB, system, boot, or read-only disk.'
-    }
-    if (!$Identity -or [string]$disk.UniqueId -ne $Identity) { throw 'USB identity changed. Select the drive again.' }
-    $file = Get-Item -LiteralPath $ImagePath
-    if (!$ImageHash -or (Get-FileHash -LiteralPath $ImagePath -Algorithm SHA256).Hash -ne $ImageHash) {
-        throw 'Installer image changed. Select the image again.'
-    }
-    $sector = [int]$disk.LogicalSectorSize
-    if ($sector -le 0) { throw 'Cannot determine USB sector size.' }
-    $paddedSize = [long]([Math]::Ceiling($file.Length / [double]$sector) * $sector)
-    if ($disk.Size -lt $paddedSize) { throw 'The USB drive is smaller than the installer image.' }
-    Say ("`nSelected USB drive: " + (Describe-Disk $disk))
-    Say 'Creating the installer USB will erase all files on this drive.' Yellow
-    if ((Select-Option 'Erase this USB drive and create the installer?' @('Cancel - keep the USB unchanged','Erase this USB and create the installer') 1) -eq 0) {
-        Say 'Cancelled. USB unchanged.' Yellow
-        return
-    }
-    $currentDisk = Get-Disk -Number $Number
-    if ([string]$currentDisk.UniqueId -ne $Identity -or $currentDisk.IsBoot -or $currentDisk.IsSystem -or $currentDisk.BusType -ne 'USB') {
-        throw 'USB identity or system-disk status changed. Select the drive again.'
-    }
-    # Resolve all volumes belonging to this disk, including those without a drive letter.
-    $volumes = @(Get-Partition -DiskNumber $Number | Get-Volume -ErrorAction SilentlyContinue |
-        ForEach-Object { if ($_.Path) { $_.Path.TrimEnd('\') } } | Select-Object -Unique)
-    if (!('BootstrapUsbWriter' -as [type])) {
-        Add-Type -TypeDefinition @'
-using System;
-using System.IO;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-using System.ComponentModel;
-using Microsoft.Win32.SafeHandles;
-public static class BootstrapUsbWriter {
-    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
-    static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool DeviceIoControl(SafeFileHandle handle, uint code, IntPtr input, uint inputSize, IntPtr output, uint outputSize, out uint returned, IntPtr overlapped);
-    static SafeFileHandle Open(string path) {
-        SafeFileHandle handle = CreateFile(path, 0xC0000000u, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
-        if (handle.IsInvalid) { handle.Dispose(); throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot open " + path); }
-        return handle;
-    }
-    public static void Write(string image, int disk, string[] volumes, int sector) {
-        var locked = new List<SafeFileHandle>();
-        try {
-            foreach (string volume in volumes) {
-                SafeFileHandle handle = Open(volume);
-                locked.Add(handle);
-                uint returned;
-                if (!DeviceIoControl(handle, 0x00090018, IntPtr.Zero, 0, IntPtr.Zero, 0, out returned, IntPtr.Zero))
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot lock USB volume " + volume);
-                if (!DeviceIoControl(handle, 0x00090020, IntPtr.Zero, 0, IntPtr.Zero, 0, out returned, IntPtr.Zero))
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot dismount USB volume " + volume);
-            }
-            using (SafeFileHandle handle = Open(@"\\.\PhysicalDrive" + disk))
-            using (var target = new FileStream(handle, FileAccess.ReadWrite, 1024*1024, false))
-            using (var source = File.OpenRead(image)) {
-                byte[] buffer = new byte[1024*1024];
-                int count;
-                while ((count = source.Read(buffer, 0, buffer.Length)) > 0) {
-                    int padded = ((count + sector - 1) / sector) * sector;
-                    if (padded != count) Array.Clear(buffer, count, padded - count);
-                    target.Write(buffer, 0, padded);
-                }
-                target.Flush(true);
-                target.Position = 0;
-                source.Position = 0;
-                byte[] readback = new byte[buffer.Length];
-                while ((count = source.Read(buffer, 0, buffer.Length)) > 0) {
-                    int total = 0;
-                    while (total < count) {
-                        int got = target.Read(readback, total, count-total);
-                        if (got == 0) throw new IOException("USB read-back ended early.");
-                        total += got;
-                    }
-                    for (int i=0; i<count; i++) if (buffer[i] != readback[i]) throw new IOException("USB read-back verification failed.");
-                }
-            }
-        } finally { foreach (SafeFileHandle handle in locked) handle.Dispose(); }
-    }
-}
-'@
-    }
-    Say 'Writing installer and checking the written bytes. Please wait...'
-    [BootstrapUsbWriter]::Write($ImagePath, $Number, [string[]]$volumes, $sector)
-    Say 'USB written and read-back verified. Safely remove it before booting the target.' Green
-}
-function Start-UsbWrite([string]$ImagePath, $Disk) {
-    $identity = [string]$Disk.UniqueId
-    if (!$identity) { throw 'Cannot establish USB identity; refusing to write.' }
-    $hash = (Get-FileHash -LiteralPath $ImagePath -Algorithm SHA256).Hash
-    if (Test-Administrator) { Write-Usb $ImagePath $Disk.Number $identity $hash; return }
-    # EncodedCommand transports paths and device identity without command-line quoting ambiguities.
-    $scriptLiteral = $script:EntryScript.Replace("'", "''")
-    $imageLiteral = $ImagePath.Replace("'", "''")
-    $idLiteral = $identity.Replace("'", "''")
-    $command = "& '$scriptLiteral' -WriteOnly -Image '$imageLiteral' -DiskNumber $($Disk.Number) -ExpectedDiskId '$idLiteral' -ExpectedImageHash '$hash'; if (`$LASTEXITCODE -ne 0) { Read-Host 'Press Enter to close' }; exit `$LASTEXITCODE"
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-    Say 'Windows will request Administrator access to write the USB.' Yellow
-    $process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList @(
-        '-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
-    if ($process.ExitCode -ne 0) { throw 'USB writing did not complete. Check the Administrator window.' }
-}
 
 try {
     if ($env:OS -ne 'Windows_NT') { throw 'This script runs on Windows. Use bootstrap_debian on Linux or macOS.' }
-    if ($WriteOnly) {
-        if (!$Image -or $DiskNumber -lt 0) { throw 'USB write parameters are missing.' }
-        Write-Usb ([IO.Path]::GetFullPath($Image)) $DiskNumber $ExpectedDiskId $ExpectedImageHash
-        exit 0
-    }
     New-Item -ItemType Directory -Force -Path $script:Tmp | Out-Null
     if (!$Image) {
         if (!$Arch) {
@@ -389,18 +260,10 @@ try {
     Say "Installer image saved: $Image" Green
     if (!$NoWrite) {
         $method = Select-Option 'How would you like to create the USB?' @(
-            'Save image only', 'Open portable balenaEtcher GUI', 'Use the built-in Windows USB writer') 2
+            'Save image only', 'Open portable balenaEtcher GUI') 2
         if ($method -eq 1) { Start-Etcher $Image; exit 0 }
-        if ($method -eq 2) {
-            $disks = @(Get-UsbDisks)
-            $options = @('Save image only (do not write a USB drive)')
-            foreach ($disk in $disks) { $options += 'Create bootable USB on ' + (Describe-Disk $disk) }
-            if (!$disks.Count) { Say 'No writable USB drives found by the built-in writer. Use portable balenaEtcher from the USB menu instead.' Yellow }
-            $choice = Select-Option 'Create a bootable USB drive, or save the installer image for later.' $options 1
-            if ($choice -gt 0) { Start-UsbWrite $Image $disks[$choice - 1] }
-        }
     }
-    Say 'Boot the USB and choose Install. Remove the installer USB when installation reboots.' Green
+    Say 'Image saved. Run again with -Image to open it in Etcher when you are ready to create the USB.' Green
     exit 0
 } catch {
     Say ("Error: " + $_.Exception.Message) Red

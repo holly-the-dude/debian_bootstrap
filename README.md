@@ -147,12 +147,6 @@ saved installer ISO already selected. No installation is needed.
 In Etcher, choose **Select target**, check the
 USB name and capacity, and click **Flash!**. Wait for validation to finish.
 
-The built-in Windows writer remains an optional choice. It rechecks the disk's
-identity and image checksum, locks/dismounts its volumes, writes and verifies the
-image. If it cannot find your USB, try the portable Etcher GUI. A drive appearing
-in Disk Management does not guarantee that Etcher will list it; check Etcher's
-target list before continuing.
-
 On macOS, an existing balena CLI installation is used when available. Its documented `.img`
 input is supplied using a temporary, byte-identical copy/link of the hybrid
 ISO; the saved ISO is unchanged. No manual balena installation is required.

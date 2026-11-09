@@ -10,10 +10,6 @@ if ($errors.Count) { throw ($errors | Out-String) }
 foreach ($function in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]}, $false)) {
     . ([scriptblock]::Create($function.Extent.Text))
 }
-$csharp = $ast.FindAll({param($node)
-    $node -is [Management.Automation.Language.StringConstantExpressionAst] -and $node.Value.Contains('public static class BootstrapUsbWriter')
-}, $true)
-Add-Type -TypeDefinition $csharp[0].Value
 $work = Join-Path ([IO.Path]::GetTempPath()) ('bootstrap-ps-test-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory $work | Out-Null
 try {
@@ -42,11 +38,6 @@ try {
     if ($env:OS -eq 'Windows_NT' -and (Convert-MsysPath 'C:\Folder With Spaces\mini.iso') -ne '/c/Folder With Spaces/mini.iso') { throw 'Incorrect MSYS path conversion' }
     function Read-Host { return '' }
     if ((Select-Option 'Test default' @('Cancel','Erase') 1) -ne 0) { throw 'Unsafe confirmation default' }
-    function Test-Administrator { return $true }
-    function Get-Disk { return [pscustomobject]@{BusType='NVMe'; IsBoot=$true; IsSystem=$true; IsReadOnly=$false} }
-    $rejected = $false
-    try { Write-Usb $config 0 'fake' 'fake' } catch { $rejected = $true }
-    if (!$rejected) { throw 'System disk accepted' }
     $staged = Join-Path $work 'staged.iso'
     $destination = Join-Path $work 'installer.iso'
     [IO.File]::WriteAllText($staged, 'first image')
@@ -86,5 +77,5 @@ try {
     $rejected = $false
     try { Get-Etcher | Out-Null } catch { $rejected = $true }
     if (!$rejected) { throw 'Corrupt Etcher download accepted' }
-    Write-Host 'PowerShell syntax, C# compilation, cpio, checksums, menu default, system-disk rejection, image replacement/rollback, and Etcher cache recovery passed.'
+    Write-Host 'PowerShell syntax, cpio, checksums, menu default, image replacement/rollback, and Etcher cache recovery passed.'
 } finally { Remove-Item $work -Recurse -Force }
