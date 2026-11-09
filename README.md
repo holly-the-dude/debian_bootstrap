@@ -76,9 +76,19 @@ Linux/macOS require Python 3.9+ and xorriso.
 
 ### Windows
 
-Run **`bootstrap_debian.cmd`** from a local folder without spaces, such as
-`C:\debian_bootstrap`. It uses Windows PowerShell; **no WSL or Python installation
-is required**. PowerShell downloads portable MSYS2/xorriso tools into `tmp/tools`.
+Keep the files in a local folder without spaces, such as
+`C:\debian_bootstrap`. Right-click **`bootstrap_debian.ps1`** and choose
+**Run as administrator**, then approve the Windows permission prompt.
+If that option is unavailable, open **Windows PowerShell** using **Run as
+administrator** and run:
+
+```powershell
+cd C:\debian_bootstrap
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\bootstrap_debian.ps1
+```
+
+**No WSL or Python installation is required**. PowerShell downloads portable
+MSYS2/xorriso tools into `tmp/tools`.
 It checks the runtime release SHA256 digest, and MSYS2 verifies package
 signatures. Nothing is added to the system PATH. UNC network shares are not
 supported.
@@ -100,11 +110,14 @@ python3 bootstrap_debian.py --arch arm64 --layout usb --output output-arm64 --no
 ```
 
 ```powershell
-.\bootstrap_debian.cmd -Arch amd64 -Layout partition -NoWrite
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\bootstrap_debian.ps1 -Arch amd64 -Layout partition -NoWrite
 ```
 
 Downloads and extracted files use a per-build folder under `tmp`, removed when
 the build finishes or fails. Portable tools remain under `tmp/tools` for reuse.
+Windows checks cached ISO tools before reuse and sets incomplete tool folders
+aside before preparing a fresh copy. Existing output does not need to be deleted
+before rebuilding; the previous ISO is kept until the new image is verified.
 Debian's current installer and the cloned Library source can change over time;
 these commands fix the selected options, not the upstream versions.
 
@@ -127,13 +140,20 @@ downloads the official Intel or Apple Silicon standalone package, verifies its
 SHA256 release digest and keeps it in `tmp/tools`. It invokes `sudo balena local
 flash`; balena provides drive selection, erase confirmation and validation.
 
-**Windows:** choose the built-in writer or balena CLI. Windows requests
-Administrator access before writing. The built-in writer rechecks the disk's
-identity and the image checksum, locks/dismounts its volumes, writes and verifies
-the image. The balena option downloads and checks the official Windows x64
-standalone package if needed, then opens its drive selector.
+**Windows:** choose **Open portable balenaEtcher GUI** (the default). The script
+downloads the official Windows x64 portable ZIP, verifies its SHA256 release
+digest, extracts it under `tmp/tools`, and opens Etcher as administrator with the
+saved installer ISO already selected. No installation is needed.
+In Etcher, choose **Select target**, check the
+USB name and capacity, and click **Flash!**. Wait for validation to finish.
 
-An existing balena installation is used when available. Its documented `.img`
+The built-in Windows writer remains an optional choice. It rechecks the disk's
+identity and image checksum, locks/dismounts its volumes, writes and verifies the
+image. If it cannot find your USB, try the portable Etcher GUI. A drive appearing
+in Disk Management does not guarantee that Etcher will list it; check Etcher's
+target list before continuing.
+
+On macOS, an existing balena CLI installation is used when available. Its documented `.img`
 input is supplied using a temporary, byte-identical copy/link of the hybrid
 ISO; the saved ISO is unchanged. No manual balena installation is required.
 The [Etcher desktop app](https://etcher.balena.io/) is also an option.

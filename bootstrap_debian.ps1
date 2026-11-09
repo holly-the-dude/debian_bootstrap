@@ -7,8 +7,6 @@ param(
     [string]$Image,
     [switch]$NoWrite,
     [switch]$WriteOnly,
-    [switch]$BalenaOnly,
-    [string]$BalenaExecutable,
     [int]$DiskNumber = -1,
     [string]$ExpectedDiskId,
     [string]$ExpectedImageHash
@@ -70,11 +68,20 @@ function Convert-MsysPath([string]$Path) {
 function Get-Xorriso {
     $root = Join-Path $script:Tmp 'tools'
     if ($root -match '\s') { throw 'Portable ISO tools need a folder path without spaces. Move this folder to e.g. C:\debian_bootstrap and run again.' }
+    New-Item -ItemType Directory -Force -Path $root | Out-Null
     $msys = Join-Path $root 'msys64'
     $exe = Join-Path $msys 'usr\bin\xorriso.exe'
-    if (Test-Path -LiteralPath $exe) { return $exe }
-    New-Item -ItemType Directory -Force -Path $root | Out-Null
-    if (!(Test-Path -LiteralPath (Join-Path $msys 'usr\bin\bash.exe'))) {
+    if (Test-Path -LiteralPath $exe) {
+        try { Invoke-Tool $exe @('-version'); return $exe }
+        catch { Say 'Cached ISO tools are incomplete; preparing a fresh copy.' Yellow }
+    }
+    # Leave interrupted caches aside rather than extracting over existing files.
+    if (Test-Path -LiteralPath $msys) {
+        Move-Item -LiteralPath $msys -Destination (Join-Path $root ('msys64-incomplete-' + [guid]::NewGuid().ToString('N')))
+    }
+    $work = Join-Path $root ('msys-setup-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $work | Out-Null
+    try {
         Say 'Preparing portable ISO tools. No WSL or Python installation is needed.'
         $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/msys2/msys2-installer/releases/latest' -Headers @{'User-Agent'='bootstrap_debian'}
         $assets = @($release.assets | Where-Object { $_.name -match '^msys2-base-x86_64-.*\.sfx\.exe$' })
@@ -82,25 +89,38 @@ function Get-Xorriso {
         $asset = $assets[0]
         if ($asset.digest -notmatch '^sha256:([a-f0-9]{64})$') { throw 'Portable tools download has no SHA256 digest.' }
         $expected = $Matches[1]
-        $archive = Join-Path $root 'msys2-base.sfx.exe'
+        $archive = Join-Path $work 'msys2-base.sfx.exe'
         Get-File $asset.browser_download_url $archive
         if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Portable tools checksum failed.' }
-        Invoke-Tool $archive @('-y', "-o$root")
-        Remove-Item -LiteralPath $archive
+        Invoke-Tool $archive @('-y', "-o$work")
+        $prepared = Join-Path $work 'msys64'
+        $oldSystem = $env:MSYSTEM
+        $oldHere = $env:CHERE_INVOKING
+        try {
+            $env:MSYSTEM = 'MSYS'
+            $env:CHERE_INVOKING = '1'
+            # The portable runtime initializes its keyring; pacman verifies package signatures.
+            Invoke-Tool (Join-Path $prepared 'usr\bin\bash.exe') @('--login','-c','pacman -Sy --needed --noconfirm xorriso')
+        } finally {
+            $env:MSYSTEM = $oldSystem
+            $env:CHERE_INVOKING = $oldHere
+        }
+        Invoke-Tool (Join-Path $prepared 'usr\bin\xorriso.exe') @('-version')
+        [IO.Directory]::Move($prepared, $msys)
+        return $exe
+    } finally { Remove-Item -LiteralPath $work -Recurse -Force }
+}
+function Publish-Image([string]$Staged, [string]$Destination) {
+    # Same-directory renames also work on filesystems without File.Replace support.
+    $backup = $Destination + '.previous-' + [guid]::NewGuid().ToString('N')
+    $hadPrevious = [IO.File]::Exists($Destination)
+    if ($hadPrevious) { [IO.File]::Move($Destination, $backup) }
+    try { [IO.File]::Move($Staged, $Destination) }
+    catch {
+        if ($hadPrevious) { [IO.File]::Move($backup, $Destination) }
+        throw
     }
-    $oldSystem = $env:MSYSTEM
-    $oldHere = $env:CHERE_INVOKING
-    try {
-        $env:MSYSTEM = 'MSYS'
-        $env:CHERE_INVOKING = '1'
-        # The portable runtime initializes its own keyring; pacman verifies package signatures.
-        Invoke-Tool (Join-Path $msys 'usr\bin\bash.exe') @('--login','-c','pacman -Sy --needed --noconfirm xorriso')
-    } finally {
-        $env:MSYSTEM = $oldSystem
-        $env:CHERE_INVOKING = $oldHere
-    }
-    if (!(Test-Path -LiteralPath $exe)) { throw 'Portable xorriso setup did not complete.' }
-    return $exe
+    if ($hadPrevious) { Remove-Item -LiteralPath $backup -Force }
 }
 function Write-CpioEntry([IO.Stream]$Stream, [string]$Name, [byte[]]$Data, [int]$Mode) {
     $nameBytes = [Text.Encoding]::ASCII.GetBytes($Name + [char]0)
@@ -174,77 +194,55 @@ function Build-Image([string]$Architecture, [string]$StorageLayout) {
         $staged = Join-Path ([IO.Path]::GetDirectoryName($output)) ('.build-' + [guid]::NewGuid().ToString('N'))
         try {
             [IO.File]::Copy($built, $staged)
-            if ([IO.File]::Exists($output)) { [IO.File]::Replace($staged, $output, $null) }
-            else { [IO.File]::Move($staged, $output) }
+            Publish-Image $staged $output
         } finally { if (Test-Path -LiteralPath $staged) { Remove-Item -LiteralPath $staged } }
         Copy-Item -LiteralPath $config -Destination (Join-Path $OutputDirectory 'preseed.cfg') -Force
         Say "Installer image ready: $output" Green
         return $output
     } finally { Remove-Item -LiteralPath $work -Recurse -Force }
 }
-function Get-Balena {
-    $installed = Get-Command balena -ErrorAction SilentlyContinue
-    if ($installed) { return $installed.Source }
+function Get-Etcher {
     $tools = Join-Path $script:Tmp 'tools'
     New-Item -ItemType Directory -Force -Path $tools | Out-Null
-    $cache = Join-Path $tools 'balena-windows-x64'
-    foreach ($name in @('balena.exe','balena.cmd')) {
-        $candidate = Join-Path $cache "balena\bin\$name"
-        if (Test-Path -LiteralPath $candidate) { return $candidate }
-    }
-    Say 'Setting up portable balena CLI. No separate installation is needed.'
-    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/balena-io/balena-cli/releases/latest' -Headers @{'User-Agent'='bootstrap_debian'}
-    $assets = @($release.assets | Where-Object { $_.name -match '-windows-x64-standalone\.tar\.gz$' })
-    if ($assets.Count -ne 1) { throw 'Cannot locate the official Windows balena standalone package.' }
+    Say 'Checking the official portable balenaEtcher release.'
+    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/balena-io/etcher/releases/latest' -Headers @{'User-Agent'='bootstrap_debian'}
+    $assets = @($release.assets | Where-Object { $_.name -match '^balenaEtcher-win32-x64-.*\.zip$' })
+    if ($assets.Count -ne 1) { throw 'Cannot locate the official Windows x64 portable Etcher ZIP.' }
     $asset = $assets[0]
-    if ($asset.digest -notmatch '^sha256:([a-f0-9]{64})$') { throw 'Balena release has no SHA256 digest; refusing unverified setup.' }
+    if ($asset.digest -notmatch '^sha256:([a-f0-9]{64})$') { throw 'Etcher release has no SHA256 digest; refusing unverified setup.' }
     $expected = $Matches[1]
-    $work = Join-Path $tools ('balena-setup-' + [guid]::NewGuid().ToString('N'))
+    $cache = Join-Path $tools ('etcher-windows-x64-' + $expected)
+    $marker = Join-Path $cache '.bootstrap-complete'
+    $exe = Join-Path $cache 'balenaEtcher.exe'
+    if ((Test-Path -LiteralPath $marker) -and (Test-Path -LiteralPath $exe)) { return $exe }
+    # A failed extraction must never be mistaken for a complete cached application.
+    if (Test-Path -LiteralPath $cache) {
+        Move-Item -LiteralPath $cache -Destination ($cache + '-incomplete-' + [guid]::NewGuid().ToString('N'))
+    }
+    $work = Join-Path $tools ('etcher-setup-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $work | Out-Null
     try {
-        $package = Join-Path $work 'balena.tar.gz'
+        $package = Join-Path $work 'etcher.zip'
+        Say 'Downloading portable balenaEtcher. No installation is needed.'
         Get-File $asset.browser_download_url $package
-        if ((Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash -ne $expected) { throw 'Balena download checksum verification failed.' }
+        if ((Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash -ne $expected) { throw 'Etcher download checksum verification failed.' }
         $extracted = Join-Path $work 'extracted'
-        New-Item -ItemType Directory -Path $extracted | Out-Null
-        $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
-        if (!(Test-Path -LiteralPath $tar)) { throw 'Windows tar.exe is required; use an up-to-date Windows 10/11 installation.' }
-        Invoke-Tool $tar @('-xzf',$package,'-C',$extracted)
-        $launcher = $null
-        foreach ($name in @('balena.exe','balena.cmd')) {
-            $candidate = Join-Path $extracted "balena\bin\$name"
-            if (Test-Path -LiteralPath $candidate) { $launcher = $candidate; break }
-        }
-        if (!$launcher) { throw 'Balena archive does not contain its expected launcher.' }
-        Invoke-Tool $launcher @('version')
-        if (Test-Path -LiteralPath $cache) { throw "Incomplete balena cache at $cache; remove it and retry." }
-        [IO.Directory]::Move($extracted, $cache)
-        return (Join-Path $cache ('balena\bin\' + [IO.Path]::GetFileName($launcher)))
+        Expand-Archive -LiteralPath $package -DestinationPath $extracted
+        $launchers = @(Get-ChildItem -LiteralPath $extracted -Filter 'balenaEtcher.exe' -Recurse -File)
+        if ($launchers.Count -ne 1) { throw 'Etcher ZIP does not contain its expected application.' }
+        $app = $launchers[0].DirectoryName
+        Set-Content -LiteralPath (Join-Path $app '.bootstrap-complete') -Value $expected
+        [IO.Directory]::Move($app, $cache)
+        return $exe
     } finally { Remove-Item -LiteralPath $work -Recurse -Force }
 }
-function Start-BalenaFlash([string]$ImagePath) {
-    $exe = Get-Balena
-    if (Test-Administrator) { Invoke-BalenaFlash $ImagePath $exe; return }
-    $scriptLiteral = $script:EntryScript.Replace("'", "''")
-    $imageLiteral = $ImagePath.Replace("'", "''")
-    $exeLiteral = $exe.Replace("'", "''")
-    $command = "& '$scriptLiteral' -BalenaOnly -Image '$imageLiteral' -BalenaExecutable '$exeLiteral'; Read-Host 'Press Enter to close'; exit `$LASTEXITCODE"
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-    $process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList @(
-        '-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
-    if ($process.ExitCode -ne 0) { throw 'Balena flashing did not complete. Check its output.' }
-}
-function Invoke-BalenaFlash([string]$ImagePath, [string]$Executable) {
-    if (!(Test-Administrator)) { throw 'Balena USB writing requires Administrator access.' }
-    $work = Join-Path $script:Tmp ('flash-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Force -Path $work | Out-Null
-    try {
-        $raw = Join-Path $work 'installer.img'
-        # Preserve the hybrid ISO byte-for-byte with balena's documented .img suffix.
-        Copy-Item -LiteralPath $ImagePath -Destination $raw
-        Say 'Select the installer USB in balena and confirm erasing it. Check its validation result.' Yellow
-        Invoke-Tool $Executable @('local','flash',$raw)
-    } finally { Remove-Item -LiteralPath $work -Recurse -Force }
+function Start-Etcher([string]$ImagePath) {
+    $exe = Get-Etcher
+    Say "Opening Etcher with installer image: $ImagePath" Yellow
+    Say 'Choose Select target, check the USB name and capacity, then Flash. Wait for validation to finish.' Yellow
+    # Etcher accepts the image path as its final positional argument.
+    Start-Process -FilePath $exe -Verb RunAs -ArgumentList ('"' + $ImagePath + '"') | Out-Null
+    Say 'Etcher is open. Complete USB flashing in its window; closing this script does not stop Etcher.' Green
 }
 function Get-UsbDisks {
     return @(Get-Disk | Where-Object {
@@ -368,11 +366,6 @@ function Start-UsbWrite([string]$ImagePath, $Disk) {
 
 try {
     if ($env:OS -ne 'Windows_NT') { throw 'This script runs on Windows. Use bootstrap_debian on Linux or macOS.' }
-    if ($BalenaOnly) {
-        if (!$Image -or !$BalenaExecutable) { throw 'Balena flash parameters are missing.' }
-        Invoke-BalenaFlash ([IO.Path]::GetFullPath($Image)) $BalenaExecutable
-        exit 0
-    }
     if ($WriteOnly) {
         if (!$Image -or $DiskNumber -lt 0) { throw 'USB write parameters are missing.' }
         Write-Usb ([IO.Path]::GetFullPath($Image)) $DiskNumber $ExpectedDiskId $ExpectedImageHash
@@ -396,15 +389,15 @@ try {
     Say "Installer image saved: $Image" Green
     if (!$NoWrite) {
         $method = Select-Option 'How would you like to create the USB?' @(
-            'Save image only', 'Use the built-in Windows USB writer', 'Use balena CLI (select drive next)') 1
-        if ($method -eq 2) { Start-BalenaFlash $Image }
-        if ($method -eq 1) {
-        $disks = @(Get-UsbDisks)
-        $options = @('Save image only (do not write a USB drive)')
-        foreach ($disk in $disks) { $options += 'Create bootable USB on ' + (Describe-Disk $disk) }
-        if (!$disks.Count) { Say 'No writable USB drives found. Connect one and run again to write it.' Yellow }
-        $choice = Select-Option 'Create a bootable USB drive, or save the installer image for later.' $options 1
-        if ($choice -gt 0) { Start-UsbWrite $Image $disks[$choice - 1] }
+            'Save image only', 'Open portable balenaEtcher GUI', 'Use the built-in Windows USB writer') 2
+        if ($method -eq 1) { Start-Etcher $Image; exit 0 }
+        if ($method -eq 2) {
+            $disks = @(Get-UsbDisks)
+            $options = @('Save image only (do not write a USB drive)')
+            foreach ($disk in $disks) { $options += 'Create bootable USB on ' + (Describe-Disk $disk) }
+            if (!$disks.Count) { Say 'No writable USB drives found by the built-in writer. Use portable balenaEtcher from the USB menu instead.' Yellow }
+            $choice = Select-Option 'Create a bootable USB drive, or save the installer image for later.' $options 1
+            if ($choice -gt 0) { Start-UsbWrite $Image $disks[$choice - 1] }
         }
     }
     Say 'Boot the USB and choose Install. Remove the installer USB when installation reboots.' Green

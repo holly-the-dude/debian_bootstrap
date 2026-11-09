@@ -47,5 +47,44 @@ try {
     $rejected = $false
     try { Write-Usb $config 0 'fake' 'fake' } catch { $rejected = $true }
     if (!$rejected) { throw 'System disk accepted' }
-    Write-Host 'PowerShell syntax, C# compilation, cpio, checksums, menu default, and system-disk rejection passed.'
+    $staged = Join-Path $work 'staged.iso'
+    $destination = Join-Path $work 'installer.iso'
+    [IO.File]::WriteAllText($staged, 'first image')
+    Publish-Image $staged $destination
+    [IO.File]::WriteAllText($staged, 'rebuilt image')
+    Publish-Image $staged $destination
+    if ([IO.File]::ReadAllText($destination) -ne 'rebuilt image') { throw 'Existing image not replaced' }
+    $rejected = $false
+    try { Publish-Image $staged $destination } catch { $rejected = $true }
+    if (!$rejected -or [IO.File]::ReadAllText($destination) -ne 'rebuilt image') { throw 'Failed publication lost previous image' }
+
+    # Exercise real ZIP extraction, partial-cache recovery and reuse without network access.
+    $script:Tmp = Join-Path $work 'tmp'
+    $fixture = Join-Path $work 'etcher-fixture'
+    New-Item -ItemType Directory -Path $fixture | Out-Null
+    Set-Content -LiteralPath (Join-Path $fixture 'balenaEtcher.exe') -Value 'test executable'
+    Set-Content -LiteralPath (Join-Path $fixture 'resources.pak') -Value 'test resource'
+    $script:EtcherZip = Join-Path $work 'etcher.zip'
+    Compress-Archive -Path (Join-Path $fixture '*') -DestinationPath $script:EtcherZip
+    $script:EtcherHash = (Get-FileHash $script:EtcherZip -Algorithm SHA256).Hash.ToLowerInvariant()
+    $script:EtcherDownloads = 0
+    function Invoke-RestMethod {
+        return @{assets=@(@{name='balenaEtcher-win32-x64-2.1.9.zip'; digest=('sha256:' + $script:EtcherHash); browser_download_url='https://example.test/etcher.zip'})}
+    }
+    function Get-File {
+        param($Url, $Destination)
+        $script:EtcherDownloads++
+        Copy-Item -LiteralPath $script:EtcherZip -Destination $Destination
+    }
+    $cache = Join-Path $script:Tmp ('tools/etcher-windows-x64-' + $script:EtcherHash)
+    New-Item -ItemType Directory -Path $cache -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $cache 'balenaEtcher.exe') -Value 'partial download'
+    $etcher = Get-Etcher
+    if (!(Test-Path -LiteralPath $etcher) -or !(Test-Path -LiteralPath (Join-Path $cache 'resources.pak'))) { throw 'Portable Etcher extraction failed' }
+    if ((Get-Etcher) -ne $etcher -or $script:EtcherDownloads -ne 1) { throw 'Complete Etcher cache not reused' }
+    $script:EtcherHash = '0' * 64
+    $rejected = $false
+    try { Get-Etcher | Out-Null } catch { $rejected = $true }
+    if (!$rejected) { throw 'Corrupt Etcher download accepted' }
+    Write-Host 'PowerShell syntax, C# compilation, cpio, checksums, menu default, system-disk rejection, image replacement/rollback, and Etcher cache recovery passed.'
 } finally { Remove-Item $work -Recurse -Force }
