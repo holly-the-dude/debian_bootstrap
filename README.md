@@ -1,5 +1,12 @@
 # Bare-metal Debian installation for the Library
 
+**Your personal, offline digital library — on your own hardware.**
+
+[![Donate](https://img.shields.io/badge/Donate-PayPal-blue?logo=paypal)](https://www.paypal.com/ncp/payment/T8MGW39TXCR4J)
+
+> **Prefer a ready-made Library device?** Pre-configured kits are available at
+> **[librarydepository.com](https://librarydepository.com)**.
+
 Turn any x86-64 PC, laptop, or ARM64 machine into an offline Library.
 `bootstrap_debian` creates a Debian 13 **trixie** installer USB, installs the
 GNOME desktop and required starting tools, and downloads
@@ -10,8 +17,22 @@ bootstrap to install the Library services and starter content.
 There are two stages: **install Debian**, then **set up the Library**.
 The Library bootstrap is not automatically executed during Debian installation.
 The same Library checkout supports native AMD64 and ARM64; despite its name,
-this is seperate from Raspberry Pi Library-Creator project. It contains changes needed
-non Raspberry Pi's.
+this is separate from the Raspberry Pi Library-Creator project and includes the
+changes needed for non-Raspberry Pi hardware.
+
+## What you can do with it
+
+Once Library setup finishes, use a browser to read stored Wikipedia and e-books,
+play music and audiobooks, browse offline maps, share files, and access optional
+Office apps. A compatible USB Meshtastic radio adds mesh messaging. Stored content
+works without internet; installation and new content downloads need a connection.
+
+- <img src="docs/icons/png/camping.png" alt="" height="20" align="absmiddle"> **Camping and travel** — bring reading, music, maps, and reference material along.
+- <img src="docs/icons/png/class.png" alt="" height="20" align="absmiddle"> **Classes and presentations** — share resources with devices on the same network.
+- <img src="docs/icons/png/rural.png" alt="" height="20" align="absmiddle"> **Remote areas** — keep useful information available beyond internet coverage.
+- <img src="docs/icons/png/emergency.png" alt="" height="20" align="absmiddle"> **Emergency reference** — access downloaded information during an internet outage while the Library has power.
+- <img src="docs/icons/png/private.png" alt="" height="20" align="absmiddle"> **Personal collections** — keep your books, music, and files on your own storage.
+- <img src="docs/icons/png/tech.png" alt="" height="20" align="absmiddle"> **DIY projects** — give a spare PC or compatible ARM64 machine a new purpose.
 
 ## 1. Prepare the hardware
 
@@ -268,14 +289,14 @@ StreetZim, Meshtastic, Downloads and optional Office. Typical ports:
 
 | Service | Port |
 | --- | --- |
-| Library homepage | 80 |
-| Downloads and uploads | 4826 |
-| Wikipedia/Kiwix | 6902 |
-| E-books | 8083 |
-| Maps | 8080 |
-| Music player | 2001 |
-| Meshtastic | 8086 |
-| StreetZim | 8093 |
+| <img src="docs/icons/png/web.png" alt="" height="20" align="absmiddle"> Library homepage | 80 |
+| <img src="docs/icons/svg/data_download.svg" alt="" height="20" align="absmiddle"> Downloads and uploads | 4826 |
+| <img src="docs/icons/png/wiki.png" alt="" height="20" align="absmiddle"> Wikipedia/Kiwix | 6902 |
+| <img src="docs/icons/png/ebooks.png" alt="" height="20" align="absmiddle"> E-books | 8083 |
+| <img src="docs/icons/png/maps.png" alt="" height="20" align="absmiddle"> Maps | 8080 |
+| <img src="docs/icons/svg/music_player.svg" alt="" height="20" align="absmiddle"> Music player | 2001 |
+| <img src="docs/icons/svg/meshtastic.svg" alt="" height="20" align="absmiddle"> Meshtastic | 8086 |
+| <img src="docs/icons/svg/street_zim.svg" alt="" height="20" align="absmiddle"> StreetZim | 8093 |
 | Optional Office | 3001 (HTTPS) |
 
 Use **Downloads** to fetch maps, ZIM collections and other offline assets.
@@ -349,3 +370,14 @@ need testing on their respective platforms.
 - [Trixie AMD64 installer](https://deb.debian.org/debian/dists/trixie/main/installer-amd64/current/images/netboot/)
 - [Trixie ARM64 installer](https://deb.debian.org/debian/dists/trixie/main/installer-arm64/current/images/netboot/)
 - [Debian firmware collection](https://cdimage.debian.org/cdimage/firmware/trixie/current/)
+
+## Support the project
+
+If the Library is useful to you, consider
+[supporting development via PayPal](https://www.paypal.com/ncp/payment/T8MGW39TXCR4J).
+
+[![Donate](https://img.shields.io/badge/Donate-PayPal-blue?logo=paypal)](https://www.paypal.com/ncp/payment/T8MGW39TXCR4J)
+
+Prefer a ready-made device? Visit [librarydepository.com](https://librarydepository.com)
+for pre-configured Library kits. For the Raspberry Pi version, see
+[Library-Creator](https://github.com/holly-the-dude/Library-Creator).
